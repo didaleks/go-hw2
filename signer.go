@@ -35,16 +35,37 @@ func ExecutePipeline(jobs ...job) {
 	for _, fibNum := range inputData {
 		inChannels[0] <- fibNum
 	}
-	close(inChannels[0])
+	resultsLimit := len(inChannels[0])
 
 	for i, job := range jobs {
-		if i == 0 {
-			job(inChannels[i], outChannels[i])
-		} else {
-			job(outChannels[i-1], outChannels[i])
+		waitForResults := resultsLimit
+		isLastJob := i+1 == jobsCount
+		if isLastJob {
+			waitForResults = 1
 		}
+
+		if i == 0 {
+			close(inChannels[0])
+		}
+		go job(inChannels[i], outChannels[i])
+		for rawOut := range outChannels[i] {
+			waitForResults--
+			fmt.Println("waitForResults", waitForResults)
+			resString := fmt.Sprintf("%v", rawOut)
+			fmt.Println("resString chan ", i, resString)
+			if !isLastJob {
+				inChannels[i+1] <- rawOut
+			}
+
+			if waitForResults == 0 {
+				close(outChannels[i])
+				if !isLastJob {
+					close(inChannels[i+1])
+				}
+			}
+		}
+
 	}
-	close(outChannels[jobsCount-1])
 
 	fmt.Println("ExecutePipeline finish")
 	elapsed := time.Since(start)
@@ -54,9 +75,7 @@ func ExecutePipeline(jobs ...job) {
 func SingleHash(in, out chan interface{}) {
 	fmt.Println("SingleHash start")
 	mu := &sync.Mutex{}
-	wg := &sync.WaitGroup{}
 	for rawIn := range in {
-		wg.Add(1)
 		dataMd5Chan := make(chan string, 1)
 		dataCrc32Chan := make(chan string, 1)
 		dataCrc32Md5Chan := make(chan string, 1)
@@ -71,21 +90,17 @@ func SingleHash(in, out chan interface{}) {
 			close(dataCrc32Md5Chan)
 		}(dataCrc32Md5Chan)
 		go func(dataCrc32Chan chan string) {
-			defer wg.Done()
 			fmt.Println("SingleHash rawIn", data)
 			mu.Lock()
 			dataMd5Chan <- DataSignerMd5(data)
 			close(dataMd5Chan)
 			mu.Unlock()
-
 			dataCrc32 := <-dataCrc32Chan
 			dataCrc32Md5 := <-dataCrc32Md5Chan
 			result := dataCrc32 + "~" + dataCrc32Md5
 			out <- result
 		}(dataCrc32Chan)
 	}
-	wg.Wait()
-	close(out)
 }
 
 func MultiHash(in, out chan interface{}) {
@@ -97,7 +112,6 @@ func MultiHash(in, out chan interface{}) {
 		subResultsMap := map[int]string{}
 		resultString := ""
 		for _, thItem := range th {
-
 			wgInternal.Add(1)
 			i := strconv.Itoa(thItem)
 			thItem := thItem
@@ -132,7 +146,6 @@ func MultiHash(in, out chan interface{}) {
 		go calculateTh(data, th, out, wg)
 	}
 	wg.Wait()
-	close(out)
 }
 
 func CombineResults(in, out chan interface{}) {
