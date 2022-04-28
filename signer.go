@@ -24,33 +24,27 @@ func main() {
 }
 func ExecutePipeline(jobs ...job) {
 	start := time.Now()
-	in1 := make(chan interface{}, 10)
-	out1 := make(chan interface{}, 10)
-	// in2 := make(chan interface{}, 10)
-	out2 := make(chan interface{}, 100)
-	// in3 := make(chan interface{}, 10)
-	out3 := make(chan interface{}, 10)
+	jobsCount := len(jobs)
+	inChannels := make([]chan interface{}, jobsCount)
+	outChannels := make([]chan interface{}, jobsCount)
+	for j := 0; j < jobsCount; j++ {
+		outChannels[j] = make(chan interface{}, 10)
+		inChannels[j] = make(chan interface{}, 10)
+	}
 
 	for _, fibNum := range inputData {
-		in1 <- fibNum
+		inChannels[0] <- fibNum
 	}
-	close(in1)
+	close(inChannels[0])
 
 	for i, job := range jobs {
-		switch i {
-		case 0:
-			job(in1, out1)
-			elapsed := time.Since(start)
-			log.Printf("Execution time %s", elapsed)
-		case 1:
-			job(out1, out2)
-			elapsed := time.Since(start)
-			log.Printf("Execution time %s", elapsed)
-		case 2:
-			job(out2, out3)
+		if i == 0 {
+			job(inChannels[i], outChannels[i])
+		} else {
+			job(outChannels[i-1], outChannels[i])
 		}
 	}
-	close(out3)
+	close(outChannels[jobsCount-1])
 
 	fmt.Println("ExecutePipeline finish")
 	elapsed := time.Since(start)
