@@ -28,44 +28,34 @@ func ExecutePipeline(jobs ...job) {
 	inChannels := make([]chan interface{}, jobsCount)
 	outChannels := make([]chan interface{}, jobsCount)
 	for j := 0; j < jobsCount; j++ {
-		outChannels[j] = make(chan interface{}, 10)
-		inChannels[j] = make(chan interface{}, 10)
+		outChannels[j] = make(chan interface{})
+		inChannels[j] = make(chan interface{})
+	}
+	inChannels[0] = make(chan interface{}, 10)
+	outChannels[jobsCount-1] = make(chan interface{}, 1)
+
+	wg := &sync.WaitGroup{}
+	for i, j := range jobs {
+		wg.Add(1)
+		var inChan chan interface{}
+		if i == 0 {
+			inChan = inChannels[0]
+		} else {
+			inChan = outChannels[i-1]
+		}
+		go func(i int, j job) {
+			defer wg.Done()
+			j(inChan, outChannels[i])
+			close(outChannels[i])
+		}(i, j)
 	}
 
 	for _, fibNum := range inputData {
 		inChannels[0] <- fibNum
 	}
-	resultsLimit := len(inChannels[0])
+	close(inChannels[0])
 
-	for i, job := range jobs {
-		waitForResults := resultsLimit
-		isLastJob := i+1 == jobsCount
-		if isLastJob {
-			waitForResults = 1
-		}
-
-		if i == 0 {
-			close(inChannels[0])
-		}
-		go job(inChannels[i], outChannels[i])
-		for rawOut := range outChannels[i] {
-			waitForResults--
-			fmt.Println("waitForResults", waitForResults)
-			resString := fmt.Sprintf("%v", rawOut)
-			fmt.Println("resString chan ", i, resString)
-			if !isLastJob {
-				inChannels[i+1] <- rawOut
-			}
-
-			if waitForResults == 0 {
-				close(outChannels[i])
-				if !isLastJob {
-					close(inChannels[i+1])
-				}
-			}
-		}
-
-	}
+	wg.Wait()
 
 	fmt.Println("ExecutePipeline finish")
 	elapsed := time.Since(start)
@@ -73,9 +63,11 @@ func ExecutePipeline(jobs ...job) {
 }
 
 func SingleHash(in, out chan interface{}) {
-	fmt.Println("SingleHash start")
+	fmt.Println("job0 start")
 	mu := &sync.Mutex{}
+	wg := &sync.WaitGroup{}
 	for rawIn := range in {
+		wg.Add(1)
 		dataMd5Chan := make(chan string, 1)
 		dataCrc32Chan := make(chan string, 1)
 		dataCrc32Md5Chan := make(chan string, 1)
@@ -89,7 +81,8 @@ func SingleHash(in, out chan interface{}) {
 			dataCrc32Md5Chan <- DataSignerCrc32(dataMd5)
 			close(dataCrc32Md5Chan)
 		}(dataCrc32Md5Chan)
-		go func(dataCrc32Chan chan string) {
+		go func(dataCrc32Chan chan string, wg *sync.WaitGroup) {
+			defer wg.Done()
 			fmt.Println("SingleHash rawIn", data)
 			mu.Lock()
 			dataMd5Chan <- DataSignerMd5(data)
@@ -99,8 +92,11 @@ func SingleHash(in, out chan interface{}) {
 			dataCrc32Md5 := <-dataCrc32Md5Chan
 			result := dataCrc32 + "~" + dataCrc32Md5
 			out <- result
-		}(dataCrc32Chan)
+		}(dataCrc32Chan, wg)
+
 	}
+	wg.Wait()
+
 }
 
 func MultiHash(in, out chan interface{}) {
